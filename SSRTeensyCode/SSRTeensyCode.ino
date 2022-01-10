@@ -1,8 +1,9 @@
-/* Use the RGB Analog Example, Teensyduino Tutorial #2
-*  http://www.pjrc.com/teensy/tutorial2.html
-*  
-*  This example code is in the public domain.
-*/
+/********************************************************************************************************
+* This code allow a teensy micro controller to be remote controlled through an HC-06 bluetooth module and
+* set the duty cycle of Solid State Relay (SSR) via pulse width modulation.
+* The SSR can have its duty cycle set directly or set via a PID loop using 
+* tempurature as error parremeter.
+**********************************************************************************************************/
 #include <vector>
 #include <tuple>
 #include <string>
@@ -10,13 +11,16 @@
 #include <stdio.h>
 #include <SoftwareSerial.h>
 
+// Used to indicate errors in function returns.
 #define ERROR_TEMP -6666.0
 #define EARLIEST_TIME 1577836800
 
+// Indicates which pins of the Teensy are connected to the serial pins of the HC-06
 const int blueRx = 0;
 const int blueTx = 1;
 SoftwareSerial hc(blueRx,blueTx);
 
+// Indicates which pins of the Teensy are connected to the SSR control pins/lines.
 const int RelayPin1 =  23;
 const int RelayPin2 =  22;
 
@@ -25,8 +29,14 @@ String bluetoothBuffer = "";
 
 char print_buf[250]; // For printing errors easily
 
+// This is class which creates a PID controller for one SSR output
+// for details on how a PID loop works read this wiki article: https://en.wikipedia.org/wiki/PID_controller
 class SSRController {
   public:
+    // State indicates the type of set point function the PID controller should use.
+    // CONST indicates a constant tempurature that the controller aims for
+    // RAMP indicates a linear increase or decrease in tempureture
+    // POWER_OFF sets the duty cycle to 0
     enum State { CONST, RAMP, POWER_OFF };
     State current_state = State::POWER_OFF;
   private:
@@ -34,7 +44,10 @@ class SSRController {
     const unsigned int MAX_RECORD_SIZE = 60*2; // 2 minutes of record time
   
     // Basic control
+    // The pin of the SSR
     int _pin;
+  
+    // Vectors containing prior tempuratures and how far they were from the set function
     std::vector<std::tuple<float, long long>> error_record;
     std::vector<std::tuple<float, long long>> temp_record;
     
@@ -52,7 +65,8 @@ class SSRController {
     float ramp; // In Celcius per millisecond
     float target_temp; // In Celcius
     float start_temp; // In Celcius
-    
+  
+    // This indicates the users desired tempurature at every point in time
     float set_point_func(long long time_ms){
         switch(current_state) {
           case State::CONST:
@@ -180,9 +194,15 @@ class SSRController {
     }
 };
 
+// In this implimentation there is only one SSR attached.
 SSRController Controller1(RelayPin1);
 
+// Message Type indicates the type of message sent from the bluetooth module
+// NONE indicates some sort of error
+// TEMP_SET indicates a comand to set the PID controller set point function for one SSR
+// TEMP_CUR indicates the tempurature recorded and the time it was recorded.
 enum MessageType { NONE, TEMP_SET, TEMP_CUR };
+
 std::string firstHalfOfSplitMessage(""); // HC06 will send data at random time intervals so sometimes messages will be 
 // cutoff at the end of one buffer and continue at the start of the next.  This string stores the cut off message so it can be recombined.
 
@@ -328,6 +348,8 @@ void parseBluetoothBuffer(String bluetoothBuffer){
   }
 }
 
+// Initialize all of pins need, the serial channel for connecting to the HC-06 bluetooth module,
+// and initialize a normal serial output for debuging
 void setup()   {                
   pinMode(RelayPin2, OUTPUT);
 
