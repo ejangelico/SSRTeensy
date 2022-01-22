@@ -6,6 +6,7 @@
 #include <vector>
 #include <tuple>
 #include <string>
+#include <sstream>
 #include <math.h>
 #include <stdio.h>
 #include <SoftwareSerial.h>
@@ -29,6 +30,7 @@ class SSRController {
   public:
     enum State { CONST, RAMP, POWER_OFF };
     State current_state = State::POWER_OFF;
+    float duty_cycle = 0.0;
   private:
     // Constants
     const unsigned int MAX_RECORD_SIZE = 60*2; // 2 minutes of record time
@@ -44,6 +46,7 @@ class SSRController {
     }
     void setDutyCycle(float percentage){
         analogWrite(_pin, round(percentage*255.0/100.0));
+        duty_cycle = percentage;
     }
 
     // Parameters for the set point function
@@ -342,6 +345,23 @@ void setup()   {
   Serial.println(teensyID);
 }
 
+bool heartbeat = true;
+
+extern float tempmonGetTemp(void);
+
+void sendHeartBeatPacket() {
+  std::ostringstream buf;
+  buf << '?' << heartbeat << '&';
+  for (int i = 0; i < 1; i++) {
+    buf << Controller1.duty_cycle << '&';
+  }
+  buf << tempmonGetTemp() << '\n';
+  hc.write(buf.str().c_str());
+  Serial.write(buf.str().c_str());
+  heartbeat = !heartbeat;
+}
+
+
 int numberOfSecondsWithoutMessage = 0;
 
 void loop() {
@@ -360,6 +380,6 @@ void loop() {
     Serial.println("ERROR: No bluetooth messages for over a minute. Shuting down Solid State Relays to avoid uncontrolled heating.");
     Controller1.enterNewSetPoint(SSRController::State::POWER_OFF, 0.0, 0.0, 0.0, 0.0);
   }
-  
+  sendHeartBeatPacket();
   delay(1000);
 }
