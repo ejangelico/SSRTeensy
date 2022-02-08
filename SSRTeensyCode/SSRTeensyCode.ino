@@ -197,8 +197,9 @@ class SSRController {
     }
 };
 
-// In this implimentation there is only one SSR attached.
-SSRController Controller1(RelayPin1);
+// A vector of SSR controller to allow the teensy to control multiple channels.
+std::vector<SSRController> Controllers;
+
 
 // Message Type indicates the type of message sent from the bluetooth module
 // NONE indicates some sort of error
@@ -219,9 +220,8 @@ int count_substring(std::string s, std::string target){
   return occurrences;
 }
 
-MessageType parseBluetoothMessage(std::string msg){
-
-    if(count_substring(msg, std::string("TEMP_SET=")) + count_substring(msg, std::string("TEMP_CUR=")) > 1){
+MessageType parseChannelMessage(std::string msg, SSRController thisController) {
+  if(count_substring(msg, std::string("TEMP_SET=")) + count_substring(msg, std::string("TEMP_CUR=")) > 1){
       sprintf(print_buf, "ERROR: received frankenstien message: %s<NEWLINETEST>", msg.c_str());
       Serial.println(print_buf);
       return MessageType::NONE;
@@ -270,7 +270,7 @@ MessageType parseBluetoothMessage(std::string msg){
         return MessageType::NONE; 
       }
 
-      Controller1.enterNewSetPoint(newState, target_temp, ramp, start_time, start_temp);
+      thisController.enterNewSetPoint(newState, target_temp, ramp, start_time, start_temp);
       
       return MessageType::TEMP_SET;
     } 
@@ -293,7 +293,7 @@ MessageType parseBluetoothMessage(std::string msg){
       sprintf(print_buf, "Setting PID parameters to: %f, %f, %f", K_p, K_i, K_d);
       Serial.println(print_buf);
 
-      Controller1.enterNewPIDParameters(K_p, K_i, K_d);
+      thisController.enterNewPIDParameters(K_p, K_i, K_d);
     }
     
     if (msg.substr(0,9) == "TEMP_CUR=") {
@@ -312,13 +312,48 @@ MessageType parseBluetoothMessage(std::string msg){
       }
 //      sprintf(print_buf, "Recieved current tempurature: %f at time %lld\n", temp, time_ms);
 //      Serial.println(print_buf);
-      Controller1.enterNewTemp(temp, time_ms);
-      Controller1.updatePID();
+      thisController.enterNewTemp(temp, time_ms);
+      thisController.updatePID();
       return MessageType::TEMP_CUR; 
     }
 
     return MessageType::NONE;
 }
+
+MessageType parseBluetoothMessage(std::string msg){
+    if (msg[0] == '#'){
+      sprintf(print_buf, "ERROR: received message without opening hashtag: %s", msg.c_str());
+      Serial.println(print_buf);
+      return MessageType::NONE;
+    }
+
+    uint colon_pos = msg.find_first_of(":");
+
+    if(colon_pos == std::string::npos) {
+      sprintf(print_buf, "ERROR: received message without seperating colon: %s", msg.c_str());
+      Serial.println(print_buf);
+      return MessageType::NONE;
+    }
+    std::string channel_str = msg.substr(1,colon_pos);
+
+    int channel_index = atoi(channel_str.c_str()) - 1;
+    
+    if(channel_index >= (int) Controllers.size()){
+      sprintf(print_buf, "ERROR: received message with channel out of range 0 to %d: %s", Controllers.size()-1, channel_str.c_str());
+      Serial.println(print_buf);
+      return MessageType::NONE;
+    }
+    
+    if(channel_index == -1){
+      sprintf(print_buf, "ERROR: received message without valid channel: %s", channel_str.c_str());
+      Serial.println(print_buf);
+      return MessageType::NONE;
+    }
+    
+    SSRController thisController = Controllers.at(channel_index);
+    return parseChannelMessage(msg.substr(colon_pos), thisController);
+}
+
 
 void parseBluetoothBuffer(String bluetoothBuffer){
   std::string buf(bluetoothBuffer.c_str());
@@ -351,10 +386,12 @@ void parseBluetoothBuffer(String bluetoothBuffer){
   }
 }
 
+
 // Initialize all of pins need, the serial channel for connecting to the HC-06 bluetooth module,
 // and initialize a normal serial output for debuging
 void setup()   {                
-  pinMode(RelayPin2, OUTPUT);
+  Controllers.push_back(SSRController(RelayPin1));
+  Controllers.push_back(SSRController(RelayPin2));
 
   hc.begin(9600);
   while(hc.available())
@@ -374,8 +411,8 @@ extern float tempmonGetTemp(void);
 void sendHeartBeatPacket() {
   std::ostringstream buf;
   buf << '?' << heartbeat << '&';
-  for (int i = 0; i < 1; i++) {
-    buf << Controller1.duty_cycle << '&';
+  for (int i = 0; i < (int) Controllers.size(); i++) {
+    buf << Controllers.at(i).duty_cycle << '&';
   }
   buf << tempmonGetTemp() << '\n';
   hc.write(buf.str().c_str());
@@ -398,9 +435,12 @@ void loop() {
 //  sprintf(print_buf, "%d seconds without a message.", numberOfSecondsWithoutMessage);
 //  Serial.println(print_buf);
 
-  if(numberOfSecondsWithoutMessage > 60 && Controller1.current_state != SSRController::State::POWER_OFF) {
+  if(numberOfSecondsWithoutMessage > 60) {
     Serial.println("ERROR: No bluetooth messages for over a minute. Shuting down Solid State Relays to avoid uncontrolled heating.");
-    Controller1.enterNewSetPoint(SSRController::State::POWER_OFF, 0.0, 0.0, 0.0, 0.0);
+    for (int i = 0; i < (int) Controllers.size(); i++) {
+      Controllers.at(i).enterNewSetPoint(SSRController::State::POWER_OFF, 0.0, 0.0, 0.0, 0.0); 
+    }
+    numberOfSecondsWithoutMessage = 0;
   }
   sendHeartBeatPacket();
   delay(1000);
