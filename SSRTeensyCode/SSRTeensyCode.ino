@@ -321,7 +321,7 @@ MessageType parseChannelMessage(std::string msg, SSRController thisController) {
 }
 
 MessageType parseBluetoothMessage(std::string msg){
-    if (msg[0] == '#'){
+    if (msg[0] != '#'){
       sprintf(print_buf, "ERROR: received message without opening hashtag: %s", msg.c_str());
       Serial.println(print_buf);
       return MessageType::NONE;
@@ -336,7 +336,7 @@ MessageType parseBluetoothMessage(std::string msg){
     }
     std::string channel_str = msg.substr(1,colon_pos);
 
-    int channel_index = atoi(channel_str.c_str()) - 1;
+    int channel_index = atoi(channel_str.c_str());
     
     if(channel_index >= (int) Controllers.size()){
       sprintf(print_buf, "ERROR: received message with channel out of range 0 to %d: %s", Controllers.size()-1, channel_str.c_str());
@@ -351,7 +351,7 @@ MessageType parseBluetoothMessage(std::string msg){
     }
     
     SSRController thisController = Controllers.at(channel_index);
-    return parseChannelMessage(msg.substr(colon_pos), thisController);
+    return parseChannelMessage(msg.substr(colon_pos+1), thisController);
 }
 
 
@@ -379,8 +379,10 @@ void parseBluetoothBuffer(String bluetoothBuffer){
       message = firstHalfOfSplitMessage + message;
       firstHalfOfSplitMessage = "";
     }
-    
-    parseBluetoothMessage(message);
+
+    if(message.length() > 1) {
+       parseBluetoothMessage(message); 
+    }
       
     old_found = found;
   }
