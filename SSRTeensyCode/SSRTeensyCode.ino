@@ -22,8 +22,8 @@ const int blueTx = 1;
 SoftwareSerial hc(blueRx,blueTx);
 
 // Indicates which pins of the Teensy are connected to the SSR control pins/lines.
-const int RelayPin1 =  23;
-const int RelayPin2 =  22;
+const int numberOfRelays = 16;
+const int relayPinList[numberOfRelays] = {2,3,4,5,6,7,8,9,10,11,12,14,15,18,19,22};
 
 const String teensyID = "HenrysSSRTeensy";
 String bluetoothBuffer = "";
@@ -391,9 +391,10 @@ void parseBluetoothBuffer(String bluetoothBuffer){
 
 // Initialize all of pins need, the serial channel for connecting to the HC-06 bluetooth module,
 // and initialize a normal serial output for debuging
-void setup()   {                
-  Controllers.push_back(SSRController(RelayPin1));
-  Controllers.push_back(SSRController(RelayPin2));
+void setup()   {  
+  for(int i = 0; i < numberOfRelays; i++) {
+    Controllers.push_back(SSRController(relayPinList[i]));              
+  }
 
   hc.begin(9600);
   while(hc.available())
