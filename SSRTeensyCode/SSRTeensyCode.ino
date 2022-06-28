@@ -23,7 +23,7 @@ SoftwareSerial hc(blueRx,blueTx);
 
 // Indicates which pins of the Teensy are connected to the SSR control pins/lines.
 const int numberOfRelays = 16;
-const int relayPinList[numberOfRelays] = {2,3,4,5,6,7,8,9,10,11,12,14,15,18,19,22};
+const int relayPinList[numberOfRelays] = {3, 2, 5, 4, 7, 6, 9, 8, 11, 10, 14, 12, 18, 15, 22, 19};
 
 const String teensyID = "HenrysSSRTeensy";
 String bluetoothBuffer = "";
