@@ -71,12 +71,10 @@ SoftwareSerial hc(blueRx, blueTx);
 const int numberOfRelays = 16;
 const int relayPinList[numberOfRelays] = {3, 2, 5, 4, 7, 6, 9, 8, 11, 10, 14, 12, 18, 15, 22, 19};
 
-const String teensyID = "HenrysSSRTeensy";
+const String teensyID = "T1";
 String bluetoothBuffer = "";
 
 char print_buf[250]; // For printing errors easily
-
-
 
 
 // This is class which creates a PID controller for one SSR output
@@ -226,7 +224,7 @@ class SSRController {
     // Basic control
     // The pin of the SSR
     int _pin;
-    int isrChan; //the isr channel number referenced by Slow_PWM object
+    int _isrChan; //the isr channel number referenced by Slow_PWM object
   
     // Vectors containing prior tempuratures and how far they were from the set function
     std::vector<std::tuple<float, long long>> error_record;
@@ -245,14 +243,14 @@ class SSRController {
 
     void setupPWM()
     {
-      isrChan = ISR_PWM.setPWM(_pin, PWM_Freq, 0); //initial duty cycle is 0, don't power yet
+      _isrChan = ISR_PWM.setPWM(_pin, PWM_Freq, 0); //initial duty cycle is 0, don't power yet
     }
     
     void setDutyCycle(float percentage)
     {
       duty_cycle = percentage;
       //the line in the if statement modifies the duty cycle.  
-      if(!ISR_PWM.modifyPWMChannel(isrChan, _pin, PWM_Freq, duty_cycle))
+      if(!ISR_PWM.modifyPWMChannel(_isrChan, _pin, PWM_Freq, duty_cycle))
       {
         Serial.print(F("modifyPWMChannel error on channel: "));
         Serial.println(_pin);
