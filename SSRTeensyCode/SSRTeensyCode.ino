@@ -99,7 +99,7 @@ class SSRController {
     // CONST indicates a constant tempurature that the controller aims for
     // RAMP indicates a linear increase or decrease in tempureture
     // POWER_OFF sets the duty cycle to 0
-    enum State { CONST, RAMP, POWER_OFF };
+    enum State { CONST, RAMP, POWER_OFF, MANUAL };
     State current_state = State::POWER_OFF;
     float duty_cycle = 0.0;
 
@@ -115,6 +115,12 @@ class SSRController {
       if (newState == State::POWER_OFF)
       {
         setDutyCycle(0.0);
+      }
+
+      if (newState == State::MANUAL)
+      {
+        target_temp = newTarget;
+        setDutyCycle(newTarget);
       }
       
       current_state = newState;
@@ -152,6 +158,12 @@ class SSRController {
       if(current_state == State::POWER_OFF)
       {
         setDutyCycle(0.0);
+        return;
+      }
+
+      if(current_state == State::MANUAL)
+      {
+        setDutyCycle(target_temp);
         return;
       }
     
@@ -286,6 +298,7 @@ class SSRController {
           }
         }
         case State::POWER_OFF:
+        case State::MANUAL:
         default:
         return ERROR_TEMP;
       }
@@ -352,6 +365,11 @@ MessageType parseChannelMessage(std::string msg, SSRController thisController) {
       if (state.compare("POWER_OFF") == 0) {
         newState = SSRController::State::POWER_OFF;
         Serial.println("POWER_OFF: Shutting down SSR.");
+      } else if (state.compare("MANUAL") == 0) {
+        newState = SSRController::State::MANUAL;
+        target_temp = atof(msg.substr(commas[0]+1, commas[1]-commas[0]).c_str());
+        sprintf(print_buf, "Manually setting duty cycle to %f", target_temp);
+        Serial.println(print_buf);
       } else if (state.compare("CONST") == 0) {
         newState = SSRController::State::CONST;
         target_temp = atof(msg.substr(commas[0]+1, commas[1]-commas[0]).c_str());
