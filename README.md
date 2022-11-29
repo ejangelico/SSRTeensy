@@ -15,6 +15,7 @@ There are 16 pulse width modulation (PWM) channels active and available for func
     - POWER_OFF
     - RAMP
     - CONST
+    - MANUAL
 - TEMP_CUR
 - PIDP_SET
 
