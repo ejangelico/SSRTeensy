@@ -593,21 +593,26 @@ void loop() {
   numberOfSecondsWithoutMessage++;
 
   //commenting this out while debugging
-  /*
+  
   while(hc.available()) {
     bluetoothBuffer = hc.readString();
-//    Serial.println(bluetoothBuffer);  
+    Serial.println(bluetoothBuffer);  
     parseBluetoothBuffer(bluetoothBuffer);
     numberOfSecondsWithoutMessage = 0;
   }
-  */
+
+
+  /*
   //serial as the message interface, for debugging
+  //comment this out when not using, comment out
+  //bluetooth mode when using. 
   while(Serial.available()) {
     bluetoothBuffer = Serial.readString();
     Serial.println(bluetoothBuffer);  
     parseBluetoothBuffer(bluetoothBuffer);
     numberOfSecondsWithoutMessage = 0;
   }
+  */
 
   
   if(numberOfSecondsWithoutMessage > 60) {
