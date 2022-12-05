@@ -76,7 +76,7 @@ const int relayPinList[numberOfRelays] = {3, 2, 5, 4, 7, 6, 9, 8, 11, 10, 14, 12
 //for the PCB version "ssr-v2b" that is meant for 4 Teensy's
 //const int relayPinList[numberOfRelays] = {2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 18, 19, 22};
 
-const String teensyID = "T1";
+const String teensyID = "Magis_SSR_Teensy";
 String bluetoothBuffer = "";
 
 char print_buf[250]; // For printing errors easily
@@ -86,6 +86,7 @@ char print_buf[250]; // For printing errors easily
 // for details on how a PID loop works read this wiki article: https://en.wikipedia.org/wiki/PID_controller
 class SSRController {
   public:
+  
     SSRController(){}
     SSRController(int SSRPin)
     {
@@ -101,8 +102,12 @@ class SSRController {
     // POWER_OFF sets the duty cycle to 0
     enum State { CONST, RAMP, POWER_OFF, MANUAL };
     State current_state = State::POWER_OFF;
-    float duty_cycle = 0.0;
-
+    
+    float getDutyCycle()
+    {
+      return duty_cycle;
+    }
+    
     void enterNewPIDParameters(float newKP, float newKI, float newKD)
     {
       K_p = newKP;
@@ -237,12 +242,15 @@ class SSRController {
   private:
     // Constants
     const unsigned int MAX_RECORD_SIZE = 60*2; // 2 minutes of record time
- 
+  
     // Basic control
     // The pin of the SSR
     int _pin;
     int _isrChan; //the isr channel number referenced by Slow_PWM object
-  
+    
+    float duty_cycle = 0.0; //from 0 to 100
+
+    
     // Vectors containing prior tempuratures and how far they were from the set function
     std::vector<std::tuple<float, long long>> error_record;
     std::vector<std::tuple<float, long long>> temp_record;
@@ -258,6 +266,8 @@ class SSRController {
     float K_i = 1.0;  // 11 * Watts per Centigrad Milliseconds = 0.011 * J/(C*s^2)
     float K_d = 1000*2*sqrt(THERMAL_MASS*K_p);    // 11 * Watts Milliseconds per Cenrigrad = 11,000 * J/C
 
+    
+
     void setupPWM()
     {
       _isrChan = ISR_PWM.setPWM(_pin, PWM_Freq, 0); //initial duty cycle is 0, don't power yet
@@ -266,6 +276,8 @@ class SSRController {
     void setDutyCycle(float percentage)
     {
       duty_cycle = percentage;
+      Serial.print("Set duty cycle to new value: ");
+      Serial.println(getDutyCycle());
       //the line in the if statement modifies the duty cycle.  
       if(!ISR_PWM.modifyPWMChannel(_isrChan, _pin, PWM_Freq, duty_cycle))
       {
@@ -390,7 +402,6 @@ MessageType parseChannelMessage(std::string msg, SSRController thisController) {
       }
 
       thisController.enterNewSetPoint(newState, target_temp, ramp, start_time, start_temp);
-      
       return MessageType::TEMP_SET;
     } 
 
@@ -567,9 +578,9 @@ void sendHeartBeatPacket() {
   std::ostringstream buf;
   buf << '?' << heartbeat << '&';
   for (int i = 0; i < (int) Controllers.size(); i++) {
-    buf << Controllers.at(i).duty_cycle << '&';
+    buf << Controllers.at(i).getDutyCycle() << '&';
   }
-  buf << tempmonGetTemp() << '\n';
+  buf << tempmonGetTemp() << '\n'; //external function that returns teensy temp in celcius
   hc.write(buf.str().c_str());
   Serial.write(buf.str().c_str());
   heartbeat = !heartbeat;
@@ -580,16 +591,25 @@ int numberOfSecondsWithoutMessage = 0;
 
 void loop() {
   numberOfSecondsWithoutMessage++;
-  
+
+  //commenting this out while debugging
+  /*
   while(hc.available()) {
     bluetoothBuffer = hc.readString();
 //    Serial.println(bluetoothBuffer);  
     parseBluetoothBuffer(bluetoothBuffer);
     numberOfSecondsWithoutMessage = 0;
   }
-//  sprintf(print_buf, "%d seconds without a message.", numberOfSecondsWithoutMessage);
-//  Serial.println(print_buf);
+  */
+  //serial as the message interface, for debugging
+  while(Serial.available()) {
+    bluetoothBuffer = Serial.readString();
+    Serial.println(bluetoothBuffer);  
+    parseBluetoothBuffer(bluetoothBuffer);
+    numberOfSecondsWithoutMessage = 0;
+  }
 
+  
   if(numberOfSecondsWithoutMessage > 60) {
     Serial.println("ERROR: No bluetooth messages for over a minute. Shuting down Solid State Relays to avoid uncontrolled heating.");
     for (int i = 0; i < (int) Controllers.size(); i++) {
@@ -597,6 +617,7 @@ void loop() {
     }
     numberOfSecondsWithoutMessage = 0;
   }
+  
   sendHeartBeatPacket();
   delay(1000);
 }
