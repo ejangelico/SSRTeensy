@@ -319,8 +319,9 @@ class SSRController {
 
 
 
-// A vector of SSR controller to allow the teensy to control multiple channels.
-std::vector<SSRController> Controllers;
+// An array of SSR controller pointers to allow 
+//the teensy to control multiple channels.
+SSRController *Controllers[numberOfRelays]; //initialized in setup
 
 std::string firstHalfOfSplitMessage(""); // HC06 will send data at random time intervals so sometimes messages will be 
 // cutoff at the end of one buffer and continue at the start of the next.  This string stores the cut off message so it can be recombined.
@@ -344,9 +345,9 @@ int count_substring(std::string s, std::string target){
 // TEMP_CUR indicates the tempurature recorded and the time it was recorded.
 enum MessageType { NONE, TEMP_SET, TEMP_CUR };
 
-MessageType parseChannelMessage(std::string msg, SSRController thisController);
+MessageType parseChannelMessage(std::string msg, SSRController *thisController);
 
-MessageType parseChannelMessage(std::string msg, SSRController thisController) {
+MessageType parseChannelMessage(std::string msg, SSRController *thisController) {
   if(count_substring(msg, std::string("TEMP_SET=")) + count_substring(msg, std::string("TEMP_CUR=")) > 1){
       sprintf(print_buf, "ERROR: received frankenstien message: %s<NEWLINETEST>", msg.c_str());
       Serial.println(print_buf);
@@ -401,7 +402,7 @@ MessageType parseChannelMessage(std::string msg, SSRController thisController) {
         return MessageType::NONE; 
       }
 
-      thisController.enterNewSetPoint(newState, target_temp, ramp, start_time, start_temp);
+      thisController->enterNewSetPoint(newState, target_temp, ramp, start_time, start_temp);
       return MessageType::TEMP_SET;
     } 
 
@@ -424,7 +425,7 @@ MessageType parseChannelMessage(std::string msg, SSRController thisController) {
       sprintf(print_buf, "Setting PID parameters to: %f, %f, %f", K_p, K_i, K_d);
       Serial.println(print_buf);
 
-      thisController.enterNewPIDParameters(K_p, K_i, K_d);
+      thisController->enterNewPIDParameters(K_p, K_i, K_d);
     }
     
     if (msg.substr(0,9) == "TEMP_CUR=") {
@@ -443,8 +444,8 @@ MessageType parseChannelMessage(std::string msg, SSRController thisController) {
       }
 //      sprintf(print_buf, "Recieved current tempurature: %f at time %lld\n", temp, time_ms);
 //      Serial.println(print_buf);
-      thisController.enterNewTemp(temp, time_ms);
-      thisController.updatePID();
+      thisController->enterNewTemp(temp, time_ms);
+      thisController->updatePID();
       return MessageType::TEMP_CUR; 
     }
 
@@ -471,8 +472,8 @@ MessageType parseBluetoothMessage(std::string msg){
 
     int channel_index = atoi(channel_str.c_str());
     
-    if(channel_index >= (int) Controllers.size()){
-      sprintf(print_buf, "ERROR: received message with channel out of range 0 to %d: %s", Controllers.size()-1, channel_str.c_str());
+    if(channel_index >= numberOfRelays){
+      sprintf(print_buf, "ERROR: received message with channel out of range 0 to %d: %s", numberOfRelays-1, channel_str.c_str());
       Serial.println(print_buf);
       return MessageType::NONE;
     }
@@ -483,7 +484,7 @@ MessageType parseBluetoothMessage(std::string msg){
       return MessageType::NONE;
     }
     
-    SSRController thisController = Controllers.at(channel_index);
+    SSRController *thisController = Controllers[channel_index];
     return parseChannelMessage(msg.substr(colon_pos+1), thisController);
 }
 
@@ -564,7 +565,7 @@ void setup()   {
   //this SSRController construction initializes the ISR_PWM channels, calling setPWM. 
   //(thus must come after the ISR_PWM setup above). 
   for(int i = 0; i < numberOfRelays; i++) {
-    Controllers.push_back(SSRController(relayPinList[i]));              
+    Controllers[i] = new SSRController(relayPinList[i]);              
   }
 
   
@@ -577,8 +578,8 @@ extern float tempmonGetTemp(void);
 void sendHeartBeatPacket() {
   std::ostringstream buf;
   buf << '?' << heartbeat << '&';
-  for (int i = 0; i < (int) Controllers.size(); i++) {
-    buf << Controllers.at(i).getDutyCycle() << '&';
+  for (int i = 0; i < numberOfRelays; i++) {
+    buf << Controllers[i]->getDutyCycle() << '&';
   }
   buf << tempmonGetTemp() << '\n'; //external function that returns teensy temp in celcius
   hc.write(buf.str().c_str());
@@ -617,8 +618,8 @@ void loop() {
   
   if(numberOfSecondsWithoutMessage > 60) {
     Serial.println("ERROR: No bluetooth messages for over a minute. Shuting down Solid State Relays to avoid uncontrolled heating.");
-    for (int i = 0; i < (int) Controllers.size(); i++) {
-      Controllers.at(i).enterNewSetPoint(SSRController::State::POWER_OFF, 0.0, 0.0, 0.0, 0.0); 
+    for (int i = 0; i < numberOfRelays; i++) {
+      Controllers[i]->enterNewSetPoint(SSRController::State::POWER_OFF, 0.0, 0.0, 0.0, 0.0); 
     }
     numberOfSecondsWithoutMessage = 0;
   }
