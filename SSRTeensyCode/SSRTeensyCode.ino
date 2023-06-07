@@ -15,10 +15,9 @@
 
 #define USING_MICROS_RESOLUTION       true  //false
 #include "Teensy_Slow_PWM.h"
-#include <SimpleTimer.h>   // https://github.com/jfturcot/SimpleTimer
 
 // Used to indicate errors in function returns.
-#define ERROR_TEMP -6666.0
+#define ERROR_TEMP 6666.0
 #define EARLIEST_TIME 1577836800
 
 /////////////////////////////////////
@@ -117,22 +116,24 @@ class SSRController {
     
     void enterNewSetPoint(State newState, float newTarget, float newRamp, long long newStartTime, float newStartTemp)
     {
-      if (newState == State::POWER_OFF)
-      {
-        setDutyCycle(0.0);
-      }
-
-      if (newState == State::MANUAL)
-      {
-        target_temp = newTarget;
-        setDutyCycle(newTarget);
-      }
-      
       current_state = newState;
       target_temp = newTarget;
       ramp = newRamp;
       start_time = newStartTime;
       start_temp = newStartTemp;
+
+      if (newState == State::POWER_OFF)
+      {
+        setDutyCycle(0.0);
+        target_temp = ERROR_TEMP;
+      }
+
+      else if (newState == State::MANUAL)
+      {
+        setDutyCycle(newTarget);
+        target_temp = ERROR_TEMP;
+      }
+      
     }
     
     void enterNewTemp(float temp, long long time_ms)
@@ -160,16 +161,9 @@ class SSRController {
     
     void updatePID()
     {
-      if(current_state == State::POWER_OFF)
+      if(current_state == State::POWER_OFF || current_state == State::MANUAL)
       {
-        setDutyCycle(0.0);
-        return;
-      }
-
-      if(current_state == State::MANUAL)
-      {
-        setDutyCycle(target_temp);
-        return;
+        return; //the duty cycle was set upon receiving the MANUAL or POWER_OFF state change
       }
     
       int record_length = error_record.size();
@@ -347,6 +341,7 @@ enum MessageType { NONE, TEMP_SET, TEMP_CUR };
 
 MessageType parseChannelMessage(std::string msg, SSRController *thisController);
 
+//See README.md for detailed info on user interface messages
 MessageType parseChannelMessage(std::string msg, SSRController *thisController) {
   if(count_substring(msg, std::string("TEMP_SET=")) + count_substring(msg, std::string("TEMP_CUR=")) > 1){
       sprintf(print_buf, "ERROR: received frankenstien message: %s<NEWLINETEST>", msg.c_str());
@@ -369,7 +364,7 @@ MessageType parseChannelMessage(std::string msg, SSRController *thisController) 
       
       std::string state = msg.substr(9, commas[0] - 9);
       SSRController::State newState = SSRController::State::POWER_OFF;
-      float target_temp = ERROR_TEMP;
+      float target = ERROR_TEMP;
       float ramp = ERROR_TEMP;
       long long start_time = 0;
       float start_temp = ERROR_TEMP;
@@ -380,21 +375,21 @@ MessageType parseChannelMessage(std::string msg, SSRController *thisController) 
         Serial.println("POWER_OFF: Shutting down SSR.");
       } else if (state.compare("MANUAL") == 0) {
         newState = SSRController::State::MANUAL;
-        target_temp = atof(msg.substr(commas[0]+1, commas[1]-commas[0]).c_str());
-        sprintf(print_buf, "Manually setting duty cycle to %f", target_temp);
+        target = atof(msg.substr(commas[0]+1, commas[1]-commas[0]).c_str());
+        sprintf(print_buf, "Manually setting duty cycle to %f", target);
         Serial.println(print_buf);
       } else if (state.compare("CONST") == 0) {
         newState = SSRController::State::CONST;
-        target_temp = atof(msg.substr(commas[0]+1, commas[1]-commas[0]).c_str());
-        sprintf(print_buf, "Setting constant tempurature to %f", target_temp);
+        target = atof(msg.substr(commas[0]+1, commas[1]-commas[0]).c_str());
+        sprintf(print_buf, "Setting constant tempurature to %f", target);
         Serial.println(print_buf);
       } else if (state.compare("RAMP") == 0) {
         newState = SSRController::State::RAMP;
-        target_temp = atof(msg.substr(commas[0]+1, commas[1]-commas[0]).c_str());
+        target = atof(msg.substr(commas[0]+1, commas[1]-commas[0]).c_str());
         ramp = atof(msg.substr(commas[1]+1, commas[2] - commas[1]).c_str());
         start_time = strtoll(msg.substr(commas[2]+1, commas[3] - commas[2]).c_str(), NULL, 0);
         start_temp = atof(msg.substr(commas[3]+1).c_str());
-        sprintf(print_buf, "Starting ramp: %f, %f, %lld, %f", target_temp, ramp, start_time, start_temp);
+        sprintf(print_buf, "Starting ramp: %f, %f, %lld, %f", target, ramp, start_time, start_temp);
         Serial.println(print_buf);
       } else {
         sprintf(print_buf, "ERROR: TEMP_SET had invalid state. \n See message: %s", msg.c_str());
@@ -402,7 +397,7 @@ MessageType parseChannelMessage(std::string msg, SSRController *thisController) 
         return MessageType::NONE; 
       }
 
-      thisController->enterNewSetPoint(newState, target_temp, ramp, start_time, start_temp);
+      thisController->enterNewSetPoint(newState, target, ramp, start_time, start_temp);
       return MessageType::TEMP_SET;
     } 
 
