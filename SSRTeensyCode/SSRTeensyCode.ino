@@ -3,19 +3,21 @@
 * set the duty cycle of Solid State Relay (SSR) via pulse width modulation.
 * The SSR can have its duty cycle set directly or set via a PID loop using 
 * tempurature as error parremeter.
+* File name: MAGIS_SSR_PWM_16_Channel_Jan03_2023
 **********************************************************************************************************/
 #include <vector>
 #include <tuple>
 #include <string>
 #include <sstream>
+#include <iomanip>
 #include <math.h>
 #include <stdio.h>
-#include <SoftwareSerial.h>
-
+//#include <SoftwareSerial.h>
+#define hc Serial1
 
 #define USING_MICROS_RESOLUTION       true  //false
 #include "Teensy_Slow_PWM.h"
-#include <SimpleTimer.h>   // https://github.com/jfturcot/SimpleTimer
+// #include <SimpleTimer.h>   // https://urldefense.proofpoint.com/v2/url?u=https-3A__github.com_jfturcot_SimpleTimer&d=DwIGAg&c=gRgGjJ3BkIsb5y6s49QqsA&r=TJ9aEByS9_NO7MQhkCEpqWQyQawKWPYAeJgamfBbX0A&m=nh0jcz0LzrAXE0M1gxpVxeOtlCtCoKXpaDdsmlDy6arnknitdBYzc5WMF5MEw_90&s=nFWlTIp1-UZ4jbI-mINEazQhmzbxpvtFaT7doIhNyqU&e= 
 
 // Used to indicate errors in function returns.
 #define ERROR_TEMP -6666.0
@@ -44,6 +46,9 @@ volatile uint32_t startMicros = 0;
 unsigned __exidx_start;
 unsigned __exidx_end;
 
+// Create a buffer for the bluetooth serial receive
+int const bufCount = 1024;
+unsigned char ser1buf[1024];
 
 //Timer object, selects TEENSY_TIMER_1 from hardware definitions.
 //Don't change that number unless you read the manual of TeensyTimer
@@ -63,9 +68,9 @@ void TimerHandler()
 
 
 // Indicates which pins of the Teensy are connected to the serial pins of the HC-06
-const int blueRx = 0;
-const int blueTx = 1;
-SoftwareSerial hc(blueRx, blueTx);
+//const int blueRx = 0;
+//const int blueTx = 1;
+//SoftwareSerial hc(blueRx, blueTx);
 
 // Indicates which pins of the Teensy are connected to the SSR control pins/lines.
 const int numberOfRelays = 16;
@@ -83,7 +88,7 @@ char print_buf[250]; // For printing errors easily
 
 
 // This is class which creates a PID controller for one SSR output
-// for details on how a PID loop works read this wiki article: https://en.wikipedia.org/wiki/PID_controller
+// for details on how a PID loop works read this wiki article: https://urldefense.proofpoint.com/v2/url?u=https-3A__en.wikipedia.org_wiki_PID-5Fcontroller&d=DwIGAg&c=gRgGjJ3BkIsb5y6s49QqsA&r=TJ9aEByS9_NO7MQhkCEpqWQyQawKWPYAeJgamfBbX0A&m=nh0jcz0LzrAXE0M1gxpVxeOtlCtCoKXpaDdsmlDy6arnknitdBYzc5WMF5MEw_90&s=xrfppQZv9nH49JQMQmunMUHKPnsYxJJ4qcO5PVkA0ns&e= 
 class SSRController {
   public:
   
@@ -276,7 +281,8 @@ class SSRController {
     void setDutyCycle(float percentage)
     {
       duty_cycle = percentage;
-      Serial.print("Set duty cycle to new value: ");
+      Serial.print(_isrChan);
+      Serial.print(": Set duty cycle to new value: ");
       Serial.println(getDutyCycle());
       //the line in the if statement modifies the duty cycle.  
       if(!ISR_PWM.modifyPWMChannel(_isrChan, _pin, PWM_Freq, duty_cycle))
@@ -319,8 +325,9 @@ class SSRController {
 
 
 
-// A vector of SSR controller to allow the teensy to control multiple channels.
-std::vector<SSRController> Controllers;
+// An array of SSR controller pointers to allow 
+//the teensy to control multiple channels.
+SSRController *Controllers[numberOfRelays]; //initialized in setup
 
 std::string firstHalfOfSplitMessage(""); // HC06 will send data at random time intervals so sometimes messages will be 
 // cutoff at the end of one buffer and continue at the start of the next.  This string stores the cut off message so it can be recombined.
@@ -344,9 +351,9 @@ int count_substring(std::string s, std::string target){
 // TEMP_CUR indicates the tempurature recorded and the time it was recorded.
 enum MessageType { NONE, TEMP_SET, TEMP_CUR };
 
-MessageType parseChannelMessage(std::string msg, SSRController thisController);
+MessageType parseChannelMessage(std::string msg, SSRController *thisController);
 
-MessageType parseChannelMessage(std::string msg, SSRController thisController) {
+MessageType parseChannelMessage(std::string msg, SSRController *thisController) {
   if(count_substring(msg, std::string("TEMP_SET=")) + count_substring(msg, std::string("TEMP_CUR=")) > 1){
       sprintf(print_buf, "ERROR: received frankenstien message: %s<NEWLINETEST>", msg.c_str());
       Serial.println(print_buf);
@@ -401,7 +408,7 @@ MessageType parseChannelMessage(std::string msg, SSRController thisController) {
         return MessageType::NONE; 
       }
 
-      thisController.enterNewSetPoint(newState, target_temp, ramp, start_time, start_temp);
+      thisController->enterNewSetPoint(newState, target_temp, ramp, start_time, start_temp);
       return MessageType::TEMP_SET;
     } 
 
@@ -424,7 +431,7 @@ MessageType parseChannelMessage(std::string msg, SSRController thisController) {
       sprintf(print_buf, "Setting PID parameters to: %f, %f, %f", K_p, K_i, K_d);
       Serial.println(print_buf);
 
-      thisController.enterNewPIDParameters(K_p, K_i, K_d);
+      thisController->enterNewPIDParameters(K_p, K_i, K_d);
     }
     
     if (msg.substr(0,9) == "TEMP_CUR=") {
@@ -443,8 +450,8 @@ MessageType parseChannelMessage(std::string msg, SSRController thisController) {
       }
 //      sprintf(print_buf, "Recieved current tempurature: %f at time %lld\n", temp, time_ms);
 //      Serial.println(print_buf);
-      thisController.enterNewTemp(temp, time_ms);
-      thisController.updatePID();
+      thisController->enterNewTemp(temp, time_ms);
+      thisController->updatePID();
       return MessageType::TEMP_CUR; 
     }
 
@@ -471,8 +478,8 @@ MessageType parseBluetoothMessage(std::string msg){
 
     int channel_index = atoi(channel_str.c_str());
     
-    if(channel_index >= (int) Controllers.size()){
-      sprintf(print_buf, "ERROR: received message with channel out of range 0 to %d: %s", Controllers.size()-1, channel_str.c_str());
+    if(channel_index >= numberOfRelays){
+      sprintf(print_buf, "ERROR: received message with channel out of range 0 to %d: %s", numberOfRelays-1, channel_str.c_str());
       Serial.println(print_buf);
       return MessageType::NONE;
     }
@@ -483,7 +490,7 @@ MessageType parseBluetoothMessage(std::string msg){
       return MessageType::NONE;
     }
     
-    SSRController thisController = Controllers.at(channel_index);
+    SSRController *thisController = Controllers[channel_index];
     return parseChannelMessage(msg.substr(colon_pos+1), thisController);
 }
 
@@ -526,6 +533,7 @@ void parseBluetoothBuffer(String bluetoothBuffer){
 // and initialize a normal serial output for debuging
 void setup()   {  
   //setup bluetooth communication
+  hc.addMemoryForRead(ser1buf,bufCount);
   hc.begin(9600);
   while(hc.available())
   {
@@ -564,7 +572,7 @@ void setup()   {
   //this SSRController construction initializes the ISR_PWM channels, calling setPWM. 
   //(thus must come after the ISR_PWM setup above). 
   for(int i = 0; i < numberOfRelays; i++) {
-    Controllers.push_back(SSRController(relayPinList[i]));              
+    Controllers[i] = new SSRController(relayPinList[i]);              
   }
 
   
@@ -576,11 +584,12 @@ extern float tempmonGetTemp(void);
 
 void sendHeartBeatPacket() {
   std::ostringstream buf;
-  buf << '?' << heartbeat << '&';
-  for (int i = 0; i < (int) Controllers.size(); i++) {
-    buf << Controllers.at(i).getDutyCycle() << '&';
+  buf << '?' << heartbeat << '&' << std::fixed << std::setprecision(2);
+  for (int i = 0; i < numberOfRelays; i++) {
+    buf << Controllers[i]->getDutyCycle() << '&';
   }
-  buf << tempmonGetTemp() << '\n'; //external function that returns teensy temp in celcius
+  buf << tempmonGetTemp() << '\n';
+  //buf << ((int)(100.*tempmonGetTemp()))/100. << '\n'; //external function that returns teensy temp in celcius
   hc.write(buf.str().c_str());
   Serial.write(buf.str().c_str());
   heartbeat = !heartbeat;
@@ -617,8 +626,8 @@ void loop() {
   
   if(numberOfSecondsWithoutMessage > 60) {
     Serial.println("ERROR: No bluetooth messages for over a minute. Shuting down Solid State Relays to avoid uncontrolled heating.");
-    for (int i = 0; i < (int) Controllers.size(); i++) {
-      Controllers.at(i).enterNewSetPoint(SSRController::State::POWER_OFF, 0.0, 0.0, 0.0, 0.0); 
+    for (int i = 0; i < numberOfRelays; i++) {
+      Controllers[i]->enterNewSetPoint(SSRController::State::POWER_OFF, 0.0, 0.0, 0.0, 0.0); 
     }
     numberOfSecondsWithoutMessage = 0;
   }
