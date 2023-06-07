@@ -1,0 +1,303 @@
+[
+    {
+        "id": "5675f56fafe9ab65",
+        "type": "tab",
+        "label": "i2c tester",
+        "disabled": false,
+        "info": "",
+        "env": []
+    },
+    {
+        "id": "31e5eee0a3d5cd32",
+        "type": "i2c scan",
+        "z": "5675f56fafe9ab65",
+        "name": "",
+        "busno": "1",
+        "x": 340,
+        "y": 200,
+        "wires": [
+            [
+                "cc26cb91e2b491d1"
+            ],
+            [
+                "e26a4d3b2306ae40"
+            ]
+        ]
+    },
+    {
+        "id": "f7a5654a32ebdc1f",
+        "type": "inject",
+        "z": "5675f56fafe9ab65",
+        "name": "Connect to i2c to scan for devices",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 160,
+        "y": 160,
+        "wires": [
+            [
+                "31e5eee0a3d5cd32"
+            ]
+        ]
+    },
+    {
+        "id": "e26a4d3b2306ae40",
+        "type": "debug",
+        "z": "5675f56fafe9ab65",
+        "name": "",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "false",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 570,
+        "y": 220,
+        "wires": []
+    },
+    {
+        "id": "cc26cb91e2b491d1",
+        "type": "debug",
+        "z": "5675f56fafe9ab65",
+        "name": "",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "false",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 530,
+        "y": 140,
+        "wires": []
+    },
+    {
+        "id": "889fb532cbe2b129",
+        "type": "i2c out",
+        "z": "5675f56fafe9ab65",
+        "name": "",
+        "busno": "1",
+        "address": "8",
+        "command": "0",
+        "payload": "payload",
+        "payloadType": "msg",
+        "count": "31",
+        "x": 590,
+        "y": 440,
+        "wires": [
+            [
+                "f91283b13b4f87c8"
+            ]
+        ]
+    },
+    {
+        "id": "0e7780e717013059",
+        "type": "inject",
+        "z": "5675f56fafe9ab65",
+        "name": "Message to Teensy here",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "address",
+                "v": "8",
+                "vt": "num"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "payload": "{0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0, 0.7, 0.5, 0.6, 0.3, 0.7, 0.5, 0.2, 0.1}",
+        "payloadType": "str",
+        "x": 110,
+        "y": 400,
+        "wires": [
+            [
+                "0a2e7d3bd4bd06c4"
+            ]
+        ]
+    },
+    {
+        "id": "4a5adfb0d82e8493",
+        "type": "i2c in",
+        "z": "5675f56fafe9ab65",
+        "name": "",
+        "busno": "1",
+        "address": "8",
+        "command": "",
+        "count": "31",
+        "x": 390,
+        "y": 700,
+        "wires": [
+            [
+                "d852f0b7a08fb078"
+            ]
+        ]
+    },
+    {
+        "id": "9343d51cfffc8517",
+        "type": "inject",
+        "z": "5675f56fafe9ab65",
+        "name": "Request to read signal",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "payload": "0",
+        "payloadType": "num",
+        "x": 160,
+        "y": 560,
+        "wires": [
+            [
+                "aa3090386b2eee54"
+            ]
+        ]
+    },
+    {
+        "id": "f91283b13b4f87c8",
+        "type": "loop",
+        "z": "5675f56fafe9ab65",
+        "name": "",
+        "kind": "enum",
+        "count": "",
+        "initial": "1",
+        "step": "1",
+        "condition": "",
+        "conditionType": "js",
+        "when": "before",
+        "enumeration": "payload",
+        "enumerationType": "msg",
+        "limit": "",
+        "loopPayload": "loop-val",
+        "finalPayload": "final-orig",
+        "x": 590,
+        "y": 340,
+        "wires": [
+            [],
+            [
+                "889fb532cbe2b129"
+            ]
+        ]
+    },
+    {
+        "id": "0a2e7d3bd4bd06c4",
+        "type": "function",
+        "z": "5675f56fafe9ab65",
+        "name": "chunk into 32 byte packets ",
+        "func": "var full_buff = new Buffer.from(msg.payload) //convert string payload to buffer \nvar packetized_data = [[]];\nvar packet_count = 0;\nfor(var i = 0; i < full_buff.length; i++)\n{\n    if(packetized_data[packet_count].length > 30)\n    {\n        packetized_data.push([]);\n        packet_count += 1;\n    }\n    packetized_data[packet_count].push(full_buff[i]);\n}\n\n\nreturn {\"payload\": packetized_data};",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 300,
+        "y": 340,
+        "wires": [
+            [
+                "f91283b13b4f87c8"
+            ]
+        ]
+    },
+    {
+        "id": "9867ee131fe247ef",
+        "type": "debug",
+        "z": "5675f56fafe9ab65",
+        "name": "",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "false",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 730,
+        "y": 680,
+        "wires": []
+    },
+    {
+        "id": "d852f0b7a08fb078",
+        "type": "function",
+        "z": "5675f56fafe9ab65",
+        "name": "",
+        "func": "var k = msg.payload.toString();\nvar end = Number(k.includes(\"DEADBEEF\"));\nreturn {payload:end};",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 520,
+        "y": 700,
+        "wires": [
+            [
+                "9867ee131fe247ef",
+                "aa3090386b2eee54"
+            ]
+        ]
+    },
+    {
+        "id": "aa3090386b2eee54",
+        "type": "while-loop",
+        "z": "5675f56fafe9ab65",
+        "name": "",
+        "condi": "msg.payload < 1",
+        "limit": false,
+        "limitTime": "10",
+        "time": "wlaa3090386b2eee54",
+        "timeType": "msg",
+        "x": 430,
+        "y": 560,
+        "wires": [
+            [],
+            [
+                "4a5adfb0d82e8493"
+            ]
+        ]
+    },
+    {
+        "id": "abe632386cb05f2a",
+        "type": "comment",
+        "z": "5675f56fafe9ab65",
+        "name": "Read data from Teensy",
+        "info": "i2c in object reads 32 bytes. If it contains DEADBEEF then the loop terminates ",
+        "x": 240,
+        "y": 520,
+        "wires": []
+    },
+    {
+        "id": "571eba02c9bf6576",
+        "type": "comment",
+        "z": "5675f56fafe9ab65",
+        "name": "Write data to Teensy",
+        "info": "chunks any length of message into 32 byte packets, sends that message in a loop in packets through the i2c out object",
+        "x": 170,
+        "y": 300,
+        "wires": []
+    }
+]
