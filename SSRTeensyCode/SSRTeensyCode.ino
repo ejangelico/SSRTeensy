@@ -3,21 +3,24 @@
 * set the duty cycle of Solid State Relay (SSR) via pulse width modulation.
 * The SSR can have its duty cycle set directly or set via a PID loop using 
 * tempurature as error parremeter.
+* File name: MAGIS_SSR_PWM_16_Channel_Jan03_2023
 **********************************************************************************************************/
 #include <vector>
 #include <tuple>
 #include <string>
 #include <sstream>
+#include <iomanip>
 #include <math.h>
 #include <stdio.h>
-#include <SoftwareSerial.h>
-
+//#include <SoftwareSerial.h>
+#define hc Serial1
 
 #define USING_MICROS_RESOLUTION       true  //false
 #include "Teensy_Slow_PWM.h"
+// #include <SimpleTimer.h>   // https://urldefense.proofpoint.com/v2/url?u=https-3A__github.com_jfturcot_SimpleTimer&d=DwIGAg&c=gRgGjJ3BkIsb5y6s49QqsA&r=TJ9aEByS9_NO7MQhkCEpqWQyQawKWPYAeJgamfBbX0A&m=nh0jcz0LzrAXE0M1gxpVxeOtlCtCoKXpaDdsmlDy6arnknitdBYzc5WMF5MEw_90&s=nFWlTIp1-UZ4jbI-mINEazQhmzbxpvtFaT7doIhNyqU&e= 
 
 // Used to indicate errors in function returns.
-#define ERROR_TEMP 6666.0
+#define ERROR_TEMP -6666.0
 #define EARLIEST_TIME 1577836800
 
 /////////////////////////////////////
@@ -43,6 +46,9 @@ volatile uint32_t startMicros = 0;
 unsigned __exidx_start;
 unsigned __exidx_end;
 
+// Create a buffer for the bluetooth serial receive
+int const bufCount = 1024;
+unsigned char ser1buf[1024];
 
 //Timer object, selects TEENSY_TIMER_1 from hardware definitions.
 //Don't change that number unless you read the manual of TeensyTimer
@@ -62,9 +68,9 @@ void TimerHandler()
 
 
 // Indicates which pins of the Teensy are connected to the serial pins of the HC-06
-const int blueRx = 0;
-const int blueTx = 1;
-SoftwareSerial hc(blueRx, blueTx);
+//const int blueRx = 0;
+//const int blueTx = 1;
+//SoftwareSerial hc(blueRx, blueTx);
 
 // Indicates which pins of the Teensy are connected to the SSR control pins/lines.
 const int numberOfRelays = 16;
@@ -82,7 +88,7 @@ char print_buf[250]; // For printing errors easily
 
 
 // This is class which creates a PID controller for one SSR output
-// for details on how a PID loop works read this wiki article: https://en.wikipedia.org/wiki/PID_controller
+// for details on how a PID loop works read this wiki article: https://urldefense.proofpoint.com/v2/url?u=https-3A__en.wikipedia.org_wiki_PID-5Fcontroller&d=DwIGAg&c=gRgGjJ3BkIsb5y6s49QqsA&r=TJ9aEByS9_NO7MQhkCEpqWQyQawKWPYAeJgamfBbX0A&m=nh0jcz0LzrAXE0M1gxpVxeOtlCtCoKXpaDdsmlDy6arnknitdBYzc5WMF5MEw_90&s=xrfppQZv9nH49JQMQmunMUHKPnsYxJJ4qcO5PVkA0ns&e= 
 class SSRController {
   public:
   
@@ -116,24 +122,22 @@ class SSRController {
     
     void enterNewSetPoint(State newState, float newTarget, float newRamp, long long newStartTime, float newStartTemp)
     {
+      if (newState == State::POWER_OFF)
+      {
+        setDutyCycle(0.0);
+      }
+
+      if (newState == State::MANUAL)
+      {
+        target_temp = newTarget;
+        setDutyCycle(newTarget);
+      }
+      
       current_state = newState;
       target_temp = newTarget;
       ramp = newRamp;
       start_time = newStartTime;
       start_temp = newStartTemp;
-
-      if (newState == State::POWER_OFF)
-      {
-        setDutyCycle(0.0);
-        target_temp = ERROR_TEMP;
-      }
-
-      else if (newState == State::MANUAL)
-      {
-        setDutyCycle(newTarget);
-        target_temp = ERROR_TEMP;
-      }
-      
     }
     
     void enterNewTemp(float temp, long long time_ms)
@@ -161,9 +165,16 @@ class SSRController {
     
     void updatePID()
     {
-      if(current_state == State::POWER_OFF || current_state == State::MANUAL)
+      if(current_state == State::POWER_OFF)
       {
-        return; //the duty cycle was set upon receiving the MANUAL or POWER_OFF state change
+        setDutyCycle(0.0);
+        return;
+      }
+
+      if(current_state == State::MANUAL)
+      {
+        setDutyCycle(target_temp);
+        return;
       }
     
       int record_length = error_record.size();
@@ -270,7 +281,8 @@ class SSRController {
     void setDutyCycle(float percentage)
     {
       duty_cycle = percentage;
-      Serial.print("Set duty cycle to new value: ");
+      Serial.print(_isrChan);
+      Serial.print(": Set duty cycle to new value: ");
       Serial.println(getDutyCycle());
       //the line in the if statement modifies the duty cycle.  
       if(!ISR_PWM.modifyPWMChannel(_isrChan, _pin, PWM_Freq, duty_cycle))
@@ -341,7 +353,6 @@ enum MessageType { NONE, TEMP_SET, TEMP_CUR };
 
 MessageType parseChannelMessage(std::string msg, SSRController *thisController);
 
-//See README.md for detailed info on user interface messages
 MessageType parseChannelMessage(std::string msg, SSRController *thisController) {
   if(count_substring(msg, std::string("TEMP_SET=")) + count_substring(msg, std::string("TEMP_CUR=")) > 1){
       sprintf(print_buf, "ERROR: received frankenstien message: %s<NEWLINETEST>", msg.c_str());
@@ -364,7 +375,7 @@ MessageType parseChannelMessage(std::string msg, SSRController *thisController) 
       
       std::string state = msg.substr(9, commas[0] - 9);
       SSRController::State newState = SSRController::State::POWER_OFF;
-      float target = ERROR_TEMP;
+      float target_temp = ERROR_TEMP;
       float ramp = ERROR_TEMP;
       long long start_time = 0;
       float start_temp = ERROR_TEMP;
@@ -375,21 +386,21 @@ MessageType parseChannelMessage(std::string msg, SSRController *thisController) 
         Serial.println("POWER_OFF: Shutting down SSR.");
       } else if (state.compare("MANUAL") == 0) {
         newState = SSRController::State::MANUAL;
-        target = atof(msg.substr(commas[0]+1, commas[1]-commas[0]).c_str());
-        sprintf(print_buf, "Manually setting duty cycle to %f", target);
+        target_temp = atof(msg.substr(commas[0]+1, commas[1]-commas[0]).c_str());
+        sprintf(print_buf, "Manually setting duty cycle to %f", target_temp);
         Serial.println(print_buf);
       } else if (state.compare("CONST") == 0) {
         newState = SSRController::State::CONST;
-        target = atof(msg.substr(commas[0]+1, commas[1]-commas[0]).c_str());
-        sprintf(print_buf, "Setting constant tempurature to %f", target);
+        target_temp = atof(msg.substr(commas[0]+1, commas[1]-commas[0]).c_str());
+        sprintf(print_buf, "Setting constant tempurature to %f", target_temp);
         Serial.println(print_buf);
       } else if (state.compare("RAMP") == 0) {
         newState = SSRController::State::RAMP;
-        target = atof(msg.substr(commas[0]+1, commas[1]-commas[0]).c_str());
+        target_temp = atof(msg.substr(commas[0]+1, commas[1]-commas[0]).c_str());
         ramp = atof(msg.substr(commas[1]+1, commas[2] - commas[1]).c_str());
         start_time = strtoll(msg.substr(commas[2]+1, commas[3] - commas[2]).c_str(), NULL, 0);
         start_temp = atof(msg.substr(commas[3]+1).c_str());
-        sprintf(print_buf, "Starting ramp: %f, %f, %lld, %f", target, ramp, start_time, start_temp);
+        sprintf(print_buf, "Starting ramp: %f, %f, %lld, %f", target_temp, ramp, start_time, start_temp);
         Serial.println(print_buf);
       } else {
         sprintf(print_buf, "ERROR: TEMP_SET had invalid state. \n See message: %s", msg.c_str());
@@ -397,7 +408,7 @@ MessageType parseChannelMessage(std::string msg, SSRController *thisController) 
         return MessageType::NONE; 
       }
 
-      thisController->enterNewSetPoint(newState, target, ramp, start_time, start_temp);
+      thisController->enterNewSetPoint(newState, target_temp, ramp, start_time, start_temp);
       return MessageType::TEMP_SET;
     } 
 
@@ -522,6 +533,7 @@ void parseBluetoothBuffer(String bluetoothBuffer){
 // and initialize a normal serial output for debuging
 void setup()   {  
   //setup bluetooth communication
+  hc.addMemoryForRead(ser1buf,bufCount);
   hc.begin(9600);
   while(hc.available())
   {
@@ -572,11 +584,12 @@ extern float tempmonGetTemp(void);
 
 void sendHeartBeatPacket() {
   std::ostringstream buf;
-  buf << '?' << heartbeat << '&';
+  buf << '?' << heartbeat << '&' << std::fixed << std::setprecision(2);
   for (int i = 0; i < numberOfRelays; i++) {
     buf << Controllers[i]->getDutyCycle() << '&';
   }
-  buf << tempmonGetTemp() << '\n'; //external function that returns teensy temp in celcius
+  buf << tempmonGetTemp() << '\n';
+  //buf << ((int)(100.*tempmonGetTemp()))/100. << '\n'; //external function that returns teensy temp in celcius
   hc.write(buf.str().c_str());
   Serial.write(buf.str().c_str());
   heartbeat = !heartbeat;
