@@ -378,7 +378,9 @@ MessageType parseChannelMessage(std::string msg, SSRController *thisController) 
       float target_temp = ERROR_TEMP;
       float ramp = ERROR_TEMP;
       long long start_time = 0;
-      float start_temp = ERROR_TEMP;
+      float start_temp = -1 * ERROR_TEMP; // This needs to be positive and large so that at no point does the PID think
+      // that the current temperature is very far below the setpoint, which would turn the heater on full blast momentarily
+      // which is not desired
       
       Serial.println(state.c_str());
       if (state.compare("POWER_OFF") == 0) {
