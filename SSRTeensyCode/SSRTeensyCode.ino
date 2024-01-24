@@ -12,8 +12,10 @@
 #include <iomanip>
 #include <math.h>
 #include <stdio.h>
+#include <i2c_driver.h>
+#include <i2c_driver_wire.h>
 //#include <SoftwareSerial.h>
-#define hc Serial1
+
 
 #define USING_MICROS_RESOLUTION       true  //false
 #include "Teensy_Slow_PWM.h"
@@ -46,9 +48,14 @@ volatile uint32_t startMicros = 0;
 unsigned __exidx_start;
 unsigned __exidx_end;
 
-// Create a buffer for the bluetooth serial receive
-int const bufCount = 1024;
-unsigned char ser1buf[1024];
+// Create a buffer for the i2c serial line
+std::string outputBuffer[256]; //array of strings, dynamically allocated memory here could cause an issue
+std::string inputBuffer = ""; //input from the controller (RPi). String to allow for unfixed length messages
+//flags for message request packetization, which at 32 byte packets (32 chars)
+bool doneWritingPackets = true; // goes false when a request for packets is made. 
+int buffer_write_counter = 0; // counter for packetizing the write buffer
+char startChar = "#"; // messages from the RPi (commands) must start with this char 
+const std::string endPacket = "DEADBEEF"; //flag the end of a message
 
 //Timer object, selects TEENSY_TIMER_1 from hardware definitions.
 //Don't change that number unless you read the manual of TeensyTimer
@@ -57,6 +64,8 @@ TeensyTimer ITimer(TEENSY_TIMER_1);
 // Init Teensy_SLOW_PWM, each can service 16 different ISR-based PWM channels
 Teensy_SLOW_PWM ISR_PWM;
 float PWM_Freq = 5.0f; //Hz
+int loop_interval = 300; //milliseconds, in the loop() function for delay
+float numberOfSecondsWithoutMessage = 0;
 
 void TimerHandler()
 { 
@@ -65,24 +74,17 @@ void TimerHandler()
 //End Slow PWM object setup
 ////////////////////////////////////
 
-
-
-// Indicates which pins of the Teensy are connected to the serial pins of the HC-06
-//const int blueRx = 0;
-//const int blueTx = 1;
-//SoftwareSerial hc(blueRx, blueTx);
-
 // Indicates which pins of the Teensy are connected to the SSR control pins/lines.
 const int numberOfRelays = 16;
 
 //for the PCB version "ssr-v1b" which is a single Teensy, 16 SSR controller prototype board with terminal block connector
-const int relayPinList[numberOfRelays] = {3, 2, 5, 4, 7, 6, 9, 8, 11, 10, 14, 12, 18, 15, 22, 19};
+//const int relayPinList[numberOfRelays] = {3, 2, 5, 4, 7, 6, 9, 8, 11, 10, 14, 12, 18, 15, 22, 19};
 
 //for the PCB version "ssr-v2b" that is meant for 4 Teensy's
-//const int relayPinList[numberOfRelays] = {2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 18, 19, 22};
+const int relayPinList[numberOfRelays] = {2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 18, 19, 22};
 
-const String teensyID = "Magis_SSR_Teensy";
-String bluetoothBuffer = "";
+const std::string teensyID = "Magis_SSR_Teensy"; //when installing on Teensy's, give them ID numbers here
+
 
 char print_buf[250]; // For printing errors easily
 
@@ -152,7 +154,7 @@ class SSRController {
       //        Serial.print("New temp added ");
       //        Serial.println(temp);
       if(current_state != State::POWER_OFF){
-        float set_point_temp = set_point_func(time_ms);
+        float set_point_temp = setPointFunc(time_ms);
         float error = set_point_temp - temp;
         error_record.push_back(std::tuple<float, long long>(error, time_ms));
       //          sprintf(print_buf, "New Record\terror: %f\ttemp: %f\tset point: %f", error, temp, set_point_temp);
@@ -292,7 +294,7 @@ class SSRController {
       }
     }
     
-    float set_point_func(long long time_ms)
+    float setPointFunc(long long time_ms)
     {
       switch(current_state) 
       {
@@ -333,7 +335,8 @@ std::string firstHalfOfSplitMessage(""); // HC06 will send data at random time i
 // cutoff at the end of one buffer and continue at the start of the next.  This string stores the cut off message so it can be recombined.
 
 
-
+//find the number of occurrances in string "s" of target
+// string "target"
 int count_substring(std::string s, std::string target){
   int occurrences = 0;
   std::string::size_type pos = 0;
@@ -354,12 +357,15 @@ enum MessageType { NONE, TEMP_SET, TEMP_CUR };
 MessageType parseChannelMessage(std::string msg, SSRController *thisController);
 
 MessageType parseChannelMessage(std::string msg, SSRController *thisController) {
+  //check if there are any occurrances of "TEMP_SET=" or "TEMP_CUR=" in the string. If not, print an error. 
   if(count_substring(msg, std::string("TEMP_SET=")) + count_substring(msg, std::string("TEMP_CUR=")) > 1){
       sprintf(print_buf, "ERROR: received frankenstien message: %s<NEWLINETEST>", msg.c_str());
       Serial.println(print_buf);
       return MessageType::NONE;
     }
-  
+    // if the first few chars of the message are TEMP_SET.
+    // Note that Evan is not so happy with all the hard coded indices
+    // in this code. but it seems to work, so not changing it at the moment. 
     if (msg.substr(0,9) == "TEMP_SET=") {
       size_t commas[4];
       size_t last_comma = 9;
@@ -460,9 +466,9 @@ MessageType parseChannelMessage(std::string msg, SSRController *thisController) 
     return MessageType::NONE;
 }
 
-MessageType parseBluetoothMessage(std::string msg);
+MessageType parseInputMessage(std::string msg);
 
-MessageType parseBluetoothMessage(std::string msg){
+MessageType parseInputMessage(std::string msg){
     if (msg[0] != '#'){
       sprintf(print_buf, "ERROR: received message without opening hashtag: %s", msg.c_str());
       Serial.println(print_buf);
@@ -497,8 +503,7 @@ MessageType parseBluetoothMessage(std::string msg){
 }
 
 
-void parseBluetoothBuffer(String bluetoothBuffer){
-  std::string buf(bluetoothBuffer.c_str());
+void parseBluetoothBuffer(std::string buf){
   std::vector<std::string> lines; 
 
   // Loop through the bluetooth buffer and seperate lines into individual messages
@@ -534,16 +539,16 @@ void parseBluetoothBuffer(String bluetoothBuffer){
 // Initialize all of pins need, the serial channel for connecting to the HC-06 bluetooth module,
 // and initialize a normal serial output for debuging
 void setup()   {  
-  //setup bluetooth communication
-  hc.addMemoryForRead(ser1buf,bufCount);
-  hc.begin(9600);
-  while(hc.available())
-  {
-    hc.read();
-  }
+  //setup i2c communication
+  //Wire1 comes from i2c driver library
+  Wire1.begin(8);        // join i2c bus with address #8
+  Wire1.onRequest(requestEvent); // RPi requests data from Teensy
+  Wire1.onReceive(receiveEvent); // Teensy receives data from RPi
+
+
 
   Serial.begin(9600);
-  Serial.println("Testing Magis SSR");
+  Serial.print("Testing Magis SSR with ID: ");
   Serial.println(teensyID);
 
   ////////////////////////////////
@@ -580,51 +585,16 @@ void setup()   {
   
 }
 
-bool heartbeat = true;
+//this is just a flip-flop bit in case you think variables are frozen
+bool heartbeat = true; 
 
 extern float tempmonGetTemp(void);
 
-void sendHeartBeatPacket() {
-  std::ostringstream buf;
-  buf << '?' << heartbeat << '&' << std::fixed << std::setprecision(2);
-  for (int i = 0; i < numberOfRelays; i++) {
-    buf << Controllers[i]->getDutyCycle() << '&';
-  }
-  buf << tempmonGetTemp() << '\n';
-  //buf << ((int)(100.*tempmonGetTemp()))/100. << '\n'; //external function that returns teensy temp in celcius
-  hc.write(buf.str().c_str());
-  Serial.write(buf.str().c_str());
-  heartbeat = !heartbeat;
-}
 
-
-int numberOfSecondsWithoutMessage = 0;
 
 void loop() {
-  numberOfSecondsWithoutMessage++;
-
-  //commenting this out while debugging
-  
-  while(hc.available()) {
-    bluetoothBuffer = hc.readString();
-    Serial.println(bluetoothBuffer);  
-    parseBluetoothBuffer(bluetoothBuffer);
-    numberOfSecondsWithoutMessage = 0;
-  }
-
-
-  /*
-  //serial as the message interface, for debugging
-  //comment this out when not using, comment out
-  //bluetooth mode when using. 
-  while(Serial.available()) {
-    bluetoothBuffer = Serial.readString();
-    Serial.println(bluetoothBuffer);  
-    parseBluetoothBuffer(bluetoothBuffer);
-    numberOfSecondsWithoutMessage = 0;
-  }
-  */
-
+  //this gets reset in the requestEvent and receiveEvent functions of the i2c event handler. 
+  numberOfSecondsWithoutMessage += float(loop_interval)/1000; //units of seconds, as loop interval is milliseconds
   
   if(numberOfSecondsWithoutMessage > 60) {
     Serial.println("ERROR: No bluetooth messages for over a minute. Shuting down Solid State Relays to avoid uncontrolled heating.");
@@ -634,6 +604,98 @@ void loop() {
     numberOfSecondsWithoutMessage = 0;
   }
   
-  sendHeartBeatPacket();
-  delay(1000);
+  delay(loop_interval);
 }
+
+string getHeartBeatPacket() {
+  std::ostringstream buf;
+  buf << '?' << heartbeat << '&' << std::fixed << std::setprecision(2);
+  for (int i = 0; i < numberOfRelays; i++) {
+    buf << Controllers[i]->getDutyCycle() << '&';
+  }
+  buf << tempmonGetTemp() << '\n';
+  heartbeat = !heartbeat;
+  return buf.c_str();
+}
+
+//takes an input message and packetizes it into the outputBuffer string array
+void packetizeMessage(std::string message)
+{
+  int buffer_counter = 0; //indexes the array of strings in outputBuffer
+  for(int i = 0; i < message.length(); i+=31)
+  {
+    std::string substr; //substring 32 byte packet
+    if(i+31 > message.length())
+    {
+      substr = message.substring(i);
+    }
+    else
+    {
+      substr = message.substring(i, i+31);
+    }
+    outputBuffer[buffer_counter] = substr;
+    buffer_counter += 1;
+  }
+  //end of message code
+  outputBuffer[buffer_counter] = endPacket;
+}
+
+//The RPi requests a 32 byte packet from the teensy.
+// There is a flag marking whether the teensy needs
+//to form a new many-packet response or whether the request
+//corresponds to one of the packets in a many-packet response. 
+void requestEvent()
+{
+  digitalWrite(led, HIGH); // briefly flash the LED
+
+  //form message out of current duty cycles, with 0.0 representing "off" 
+
+  //If this request corresponds to a resquest for a fully
+  //formed new message (and is not requesting a 32 byte packet 
+  //that is a sub-packet of a message), then form the new message
+  //(the heartbeat with duty cycles) and packetize it. 
+  if(done_writing_packets == true)
+  {
+    done_writing_packets = false;
+    packetizeMessage(getHeartBeatPacket()); //stores the output message in the outputBuffer array of strings
+  }
+
+  //one by one, send the 32 byte packets up the RPi as it requests
+  //them in a loop. 
+  std::string message = outputBuffer[buffer_write_counter];
+  char mes[message.length()+1];
+  message.toCharArray(mes, message.length()+1);
+  buffer_write_counter += 1;
+  
+  Wire1.write(mes);    
+  Serial.print("Sent: ");
+  Serial.print(mes);
+  Serial.println();
+  digitalWrite(led, LOW);
+
+  //if this is the final packet in the message
+  //then reset the message-request flag and buffer counter. 
+  if(message == "DEADBEEF")
+  {
+    done_writing_packets = true;
+    buffer_write_counter = 0;
+  }
+}
+
+// function that executes whenever data is received from master
+// this function is registered as an event, see setup()
+void receiveEvent(int _)
+{
+  digitalWrite(led, HIGH);       // briefly flash the LED
+  int count = 0;
+  while(Wire1.available() > 0) {  // loop through all but the last
+    char c = Wire1.read();        // receive byte as a character
+    count += 1;
+    Serial.print(c);             // print the character
+  }
+  Serial.print(": num bytes was ");
+  Serial.println(count);             // print the integer
+  digitalWrite(led, LOW);
+}
+
+
