@@ -49,13 +49,15 @@ unsigned __exidx_start;
 unsigned __exidx_end;
 
 // Create a buffer for the i2c serial line
-std::string outputBuffer[256]; //array of strings, dynamically allocated memory here could cause an issue
-std::string inputBuffer = ""; //input from the controller (RPi). String to allow for unfixed length messages
+String outputBuffer[256]; //array of strings, dynamically allocated memory here could cause an issue
 //flags for message request packetization, which at 32 byte packets (32 chars)
 bool doneWritingPackets = true; // goes false when a request for packets is made. 
 int buffer_write_counter = 0; // counter for packetizing the write buffer
-char startChar = "#"; // messages from the RPi (commands) must start with this char 
-const std::string endPacket = "DEADBEEF"; //flag the end of a message
+const char* startChar = "#"; // messages from the RPi (commands) must start with this char 
+String endPacket = "DEADBEEF"; //flag the end of a message
+String teensyID = "Teensy #0"; //when installing on Teensy's, give them ID numbers here
+//this is a 7 bit address. 
+const int i2cAddress = 0; //address of this teensy on the i2c bus
 
 //Timer object, selects TEENSY_TIMER_1 from hardware definitions.
 //Don't change that number unless you read the manual of TeensyTimer
@@ -66,6 +68,7 @@ Teensy_SLOW_PWM ISR_PWM;
 float PWM_Freq = 5.0f; //Hz
 int loop_interval = 300; //milliseconds, in the loop() function for delay
 float numberOfSecondsWithoutMessage = 0;
+int led = LED_BUILTIN;
 
 void TimerHandler()
 { 
@@ -82,9 +85,6 @@ const int numberOfRelays = 16;
 
 //for the PCB version "ssr-v2b" that is meant for 4 Teensy's
 const int relayPinList[numberOfRelays] = {2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 18, 19, 22};
-
-const std::string teensyID = "Magis_SSR_Teensy"; //when installing on Teensy's, give them ID numbers here
-
 
 char print_buf[250]; // For printing errors easily
 
@@ -331,7 +331,7 @@ class SSRController {
 //the teensy to control multiple channels.
 SSRController *Controllers[numberOfRelays]; //initialized in setup
 
-std::string firstHalfOfSplitMessage(""); // HC06 will send data at random time intervals so sometimes messages will be 
+std::string firstHalfOfSplitMessage(""); // This variable may be phased out in time, but is a utility for when messages get cut into multiple pieces. 
 // cutoff at the end of one buffer and continue at the start of the next.  This string stores the cut off message so it can be recombined.
 
 
@@ -466,9 +466,13 @@ MessageType parseChannelMessage(std::string msg, SSRController *thisController) 
     return MessageType::NONE;
 }
 
-MessageType parseInputMessage(std::string msg);
+MessageType parseCommand(std::string msg);
 
-MessageType parseInputMessage(std::string msg){
+//used to be called parseBluetoothMessage. 
+//this function separates particles of the message
+//to determine the channel that is being addressed, and 
+//apply the command. 
+MessageType parseCommand(std::string msg){
     if (msg[0] != '#'){
       sprintf(print_buf, "ERROR: received message without opening hashtag: %s", msg.c_str());
       Serial.println(print_buf);
@@ -503,8 +507,13 @@ MessageType parseInputMessage(std::string msg){
 }
 
 
-void parseBluetoothBuffer(std::string buf){
-  std::vector<std::string> lines; 
+//this function parses a message received by the RPi and determines if it
+//is split into two pieces or has an error before passing it to the parseBluetoothMessage function. 
+//Evan is convinced that this function will begin to be not necessary now that we
+//are moving to i2c option. It used to be called parseBluetoothBuffer. 
+//So I am putting a few print statements in Serial so that if as we debug,
+//we never see it happening, we can remove this stage. 
+void checkCommandFormat(std::string buf){
 
   // Loop through the bluetooth buffer and seperate lines into individual messages
   size_t old_found = -1;
@@ -519,16 +528,18 @@ void parseBluetoothBuffer(std::string buf){
     } 
     else if(found+1 < buf.length()) { // This condition means that the buffer did not end in a newline.
       // Therefore, the message is cutoff and we need to store the cutoff half.
+      Serial.println("ERROR: Message was not terminated with a newline. Storing the cutoff half of the message.");
       firstHalfOfSplitMessage = buf.substr(old_found+1, buf.length()-old_found-1);
     }
     
     if(old_found == (const size_t)-1 && firstHalfOfSplitMessage.length() != 0){ // recombine split messages.
+      Serial.println("Found a split message. Re-combining it with the first half of the previous message.");
       message = firstHalfOfSplitMessage + message;
       firstHalfOfSplitMessage = "";
     }
 
     if(message.length() > 1) {
-       parseBluetoothMessage(message); 
+       parseCommand(message); 
     }
       
     old_found = found;
@@ -541,9 +552,9 @@ void parseBluetoothBuffer(std::string buf){
 void setup()   {  
   //setup i2c communication
   //Wire1 comes from i2c driver library
-  Wire1.begin(8);        // join i2c bus with address #8
-  Wire1.onRequest(requestEvent); // RPi requests data from Teensy
-  Wire1.onReceive(receiveEvent); // Teensy receives data from RPi
+  Wire1.begin(i2cAddress);        // join i2c bus with address defined at top of the script
+  Wire1.onRequest(requestEvent); // RPi requests data from Teensy, such as SSR current duty cylcles and heartbeat. 
+  Wire1.onReceive(receiveEvent); // Teensy receives data from RPi that tells it to change its SSR values
 
 
 
@@ -607,7 +618,7 @@ void loop() {
   delay(loop_interval);
 }
 
-string getHeartBeatPacket() {
+std::string getHeartBeatPacket() {
   std::ostringstream buf;
   buf << '?' << heartbeat << '&' << std::fixed << std::setprecision(2);
   for (int i = 0; i < numberOfRelays; i++) {
@@ -615,17 +626,18 @@ string getHeartBeatPacket() {
   }
   buf << tempmonGetTemp() << '\n';
   heartbeat = !heartbeat;
-  return buf.c_str();
+  return std::string(buf.str().c_str());
 }
 
 //takes an input message and packetizes it into the outputBuffer string array
-void packetizeMessage(std::string message)
+void packetizeMessage(std::string m_input)
 {
+  String message = String(m_input.c_str());
   int buffer_counter = 0; //indexes the array of strings in outputBuffer
-  for(int i = 0; i < message.length(); i+=31)
+  for(int i = 0; i < int(message.length()); i+=31)
   {
-    std::string substr; //substring 32 byte packet
-    if(i+31 > message.length())
+    String substr; //substring 32 byte packet
+    if(i+31 > int(message.length()))
     {
       substr = message.substring(i);
     }
@@ -633,7 +645,7 @@ void packetizeMessage(std::string message)
     {
       substr = message.substring(i, i+31);
     }
-    outputBuffer[buffer_counter] = substr;
+    outputBuffer[buffer_counter] = substr.c_str();
     buffer_counter += 1;
   }
   //end of message code
@@ -646,6 +658,7 @@ void packetizeMessage(std::string message)
 //corresponds to one of the packets in a many-packet response. 
 void requestEvent()
 {
+  numberOfSecondsWithoutMessage = 0; //reset the counter for how long it has been since a message was received.
   digitalWrite(led, HIGH); // briefly flash the LED
 
   //form message out of current duty cycles, with 0.0 representing "off" 
@@ -654,15 +667,15 @@ void requestEvent()
   //formed new message (and is not requesting a 32 byte packet 
   //that is a sub-packet of a message), then form the new message
   //(the heartbeat with duty cycles) and packetize it. 
-  if(done_writing_packets == true)
+  if(doneWritingPackets == true)
   {
-    done_writing_packets = false;
+    doneWritingPackets = false;
     packetizeMessage(getHeartBeatPacket()); //stores the output message in the outputBuffer array of strings
   }
 
   //one by one, send the 32 byte packets up the RPi as it requests
   //them in a loop. 
-  std::string message = outputBuffer[buffer_write_counter];
+  String message = outputBuffer[buffer_write_counter];
   char mes[message.length()+1];
   message.toCharArray(mes, message.length()+1);
   buffer_write_counter += 1;
@@ -675,27 +688,34 @@ void requestEvent()
 
   //if this is the final packet in the message
   //then reset the message-request flag and buffer counter. 
-  if(message == "DEADBEEF")
+  if(message == endPacket)
   {
-    done_writing_packets = true;
+    doneWritingPackets = true;
     buffer_write_counter = 0;
   }
 }
 
-// function that executes whenever data is received from master
-// this function is registered as an event, see setup()
+// function that executes whenever a command message is
+// sent from the raspberry pi to this addressed i2c port. 
 void receiveEvent(int _)
 {
+  numberOfSecondsWithoutMessage = 0; //reset the counter for how long it has been since a message was received.
   digitalWrite(led, HIGH);       // briefly flash the LED
   int count = 0;
+  String message = "";
   while(Wire1.available() > 0) {  // loop through all but the last
     char c = Wire1.read();        // receive byte as a character
     count += 1;
-    Serial.print(c);             // print the character
+    message.concat(c);
   }
-  Serial.print(": num bytes was ");
-  Serial.println(count);             // print the integer
+  Serial.print("Got message: ");
+  Serial.print(message);
+  Serial.print("With ");
+  Serial.print(count);
+  Serial.println(" number of bytes");
   digitalWrite(led, LOW);
+
+  //sends the message up the chain of command processing
+  //starting with checking if the command has serious parsing errors. 
+  checkCommandFormat(std::string(message.c_str()));
 }
-
-
